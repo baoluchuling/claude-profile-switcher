@@ -96,8 +96,8 @@ _cc_apply_profile() {
     jq_filter="$jq_filter | del(.env.ANTHROPIC_MODEL)"
   fi
 
-  # 清理空的 env 对象
-  jq_filter="$jq_filter | if .env == {} then del(.env) else . end"
+  # 清理旧的 model 字段和空的 env 对象
+  jq_filter="$jq_filter | del(.model) | if .env == {} then del(.env) else . end"
 
   jq --arg url "$_URL" --arg token "$_TOKEN" --arg model "$_MODEL" \
     "$jq_filter" "$SETTINGS_FILE" > /tmp/_claude_settings_tmp.json && \
