@@ -42,11 +42,12 @@ _cc_show_current() {
   fi
   echo "当前状态:"
   local _url=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE" 2>/dev/null)
-  local _key=$(jq -r '.env.ANTHROPIC_API_KEY // empty' "$SETTINGS_FILE" 2>/dev/null)
-  local _model=$(jq -r '.model // "default"' "$SETTINGS_FILE" 2>/dev/null)
+  local _token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN // empty' "$SETTINGS_FILE" 2>/dev/null)
+  local _model=$(jq -r '.env.ANTHROPIC_MODEL // empty' "$SETTINGS_FILE" 2>/dev/null)
+  local _settings_model=$(jq -r '.model // "default"' "$SETTINGS_FILE" 2>/dev/null)
   echo "  API URL: ${_url:-<官方默认>}"
-  [ -n "$_key" ] && echo "  API Key: ${_key:0:8}..." || echo "  API Key: <默认登录凭证>"
-  echo "  Model:   $_model"
+  [ -n "$_token" ] && echo "  Token:   ${_token:0:8}..." || echo "  Token:   <默认登录凭证>"
+  echo "  Model:   ${_model:-$_settings_model}"
 }
 
 _cc_apply_profile() {
@@ -58,16 +59,16 @@ _cc_apply_profile() {
   fi
 
   # 读取 .env 文件中的值
-  local _URL="" _KEY="" _MODEL=""
+  local _URL="" _TOKEN="" _MODEL=""
   while IFS='=' read -r key value; do
     [[ "$key" =~ ^[[:space:]]*# ]] && continue
     [[ -z "$key" ]] && continue
     key=$(echo "$key" | xargs)
     value=$(echo "$value" | xargs)
     case "$key" in
-      ANTHROPIC_BASE_URL) _URL="$value" ;;
-      ANTHROPIC_API_KEY)  _KEY="$value" ;;
-      MODEL)              _MODEL="$value" ;;
+      ANTHROPIC_BASE_URL)  _URL="$value" ;;
+      ANTHROPIC_AUTH_TOKEN) _TOKEN="$value" ;;
+      ANTHROPIC_MODEL)     _MODEL="$value" ;;
     esac
   done < "$PROFILE_FILE"
 
@@ -81,22 +82,24 @@ _cc_apply_profile() {
     jq_filter="$jq_filter | del(.env.ANTHROPIC_BASE_URL)"
   fi
 
-  # 设置或删除 env.ANTHROPIC_API_KEY
-  if [ -n "$_KEY" ]; then
-    jq_filter="$jq_filter | .env.ANTHROPIC_API_KEY = \$key"
+  # 设置或删除 env.ANTHROPIC_AUTH_TOKEN
+  if [ -n "$_TOKEN" ]; then
+    jq_filter="$jq_filter | .env.ANTHROPIC_AUTH_TOKEN = \$token"
   else
-    jq_filter="$jq_filter | del(.env.ANTHROPIC_API_KEY)"
+    jq_filter="$jq_filter | del(.env.ANTHROPIC_AUTH_TOKEN)"
+  fi
+
+  # 设置或删除 env.ANTHROPIC_MODEL
+  if [ -n "$_MODEL" ]; then
+    jq_filter="$jq_filter | .env.ANTHROPIC_MODEL = \$model"
+  else
+    jq_filter="$jq_filter | del(.env.ANTHROPIC_MODEL)"
   fi
 
   # 清理空的 env 对象
   jq_filter="$jq_filter | if .env == {} then del(.env) else . end"
 
-  # 设置 model
-  if [ -n "$_MODEL" ]; then
-    jq_filter="$jq_filter | .model = \$model"
-  fi
-
-  jq --arg url "$_URL" --arg key "$_KEY" --arg model "$_MODEL" \
+  jq --arg url "$_URL" --arg token "$_TOKEN" --arg model "$_MODEL" \
     "$jq_filter" "$SETTINGS_FILE" > /tmp/_claude_settings_tmp.json && \
     mv /tmp/_claude_settings_tmp.json "$SETTINGS_FILE"
 
@@ -122,7 +125,7 @@ case "${1:-}" in
       echo "用法: ccswitch -c <名称>"
       return 1 2>/dev/null || exit 1
     fi
-    local PROFILE_FILE="$PROFILES_DIR/$2.env"
+    PROFILE_FILE="$PROFILES_DIR/$2.env"
     if [ -f "$PROFILE_FILE" ]; then
       echo "配置 '$2' 已存在，请用 ccswitch -e $2 编辑。"
       return 1 2>/dev/null || exit 1
@@ -132,9 +135,9 @@ case "${1:-}" in
 # 描述写在这里
 # 留空或注释掉的变量会恢复默认值
 
-#ANTHROPIC_BASE_URL=https://your-provider.com/v1
-#ANTHROPIC_API_KEY=sk-xxx
-#MODEL=opus
+#ANTHROPIC_BASE_URL=https://your-provider.com/
+#ANTHROPIC_AUTH_TOKEN=sk-xxx
+#ANTHROPIC_MODEL=model-name
 TEMPLATE
     echo "✅ 已创建配置: $2"
     echo "   文件: $PROFILE_FILE"
@@ -147,7 +150,7 @@ TEMPLATE
       echo "用法: ccswitch -e <名称>"
       return 1 2>/dev/null || exit 1
     fi
-    local PROFILE_FILE="$PROFILES_DIR/$2.env"
+    PROFILE_FILE="$PROFILES_DIR/$2.env"
     if [ ! -f "$PROFILE_FILE" ]; then
       echo "配置 '$2' 不存在。"
       return 1 2>/dev/null || exit 1
@@ -160,7 +163,7 @@ TEMPLATE
       echo "用法: ccswitch -d <名称>"
       return 1 2>/dev/null || exit 1
     fi
-    local PROFILE_FILE="$PROFILES_DIR/$2.env"
+    PROFILE_FILE="$PROFILES_DIR/$2.env"
     if [ ! -f "$PROFILE_FILE" ]; then
       echo "配置 '$2' 不存在。"
       return 1 2>/dev/null || exit 1
@@ -174,8 +177,8 @@ TEMPLATE
       echo "用法: ccswitch -r <旧名称> <新名称>"
       return 1 2>/dev/null || exit 1
     fi
-    local OLD_FILE="$PROFILES_DIR/$2.env"
-    local NEW_FILE="$PROFILES_DIR/$3.env"
+    OLD_FILE="$PROFILES_DIR/$2.env"
+    NEW_FILE="$PROFILES_DIR/$3.env"
     if [ ! -f "$OLD_FILE" ]; then
       echo "配置 '$2' 不存在。"
       return 1 2>/dev/null || exit 1
@@ -192,6 +195,7 @@ TEMPLATE
     echo "Claude Code Profile Switcher"
     echo ""
     echo "用法:"
+    echo "  ccswitch                   切回官方 OAuth（默认配置）"
     echo "  ccswitch <名称>            切换到指定配置"
     echo "  ccswitch -l                列出所有配置和当前状态"
     echo "  ccswitch -c <名称>         创建新配置"
@@ -199,6 +203,11 @@ TEMPLATE
     echo "  ccswitch -r <旧名> <新名>  重命名配置"
     echo "  ccswitch -d <名称>         删除配置"
     echo "  ccswitch -h                显示帮助"
+    echo ""
+    echo "配置文件格式 (~/.claude/profiles/<名称>.env):"
+    echo "  ANTHROPIC_BASE_URL=https://your-provider.com/"
+    echo "  ANTHROPIC_AUTH_TOKEN=sk-xxx"
+    echo "  ANTHROPIC_MODEL=model-name"
     ;;
 
   "")
@@ -221,17 +230,16 @@ create_default_profiles() {
   if [ ! -f "$PROFILES_DIR/default.env" ]; then
     cat > "$PROFILES_DIR/default.env" << 'EOF'
 # Anthropic 官方（使用 OAuth 登录凭证）
-# 不设置 URL 和 Key，切换到此配置会 unset 它们，自动回退到 OAuth
-MODEL=opus
+# 不设置任何变量，切换到此配置会清除它们，自动回退到 OAuth
 EOF
   fi
 
   if [ ! -f "$PROFILES_DIR/thirdparty.env" ]; then
     cat > "$PROFILES_DIR/thirdparty.env" << 'EOF'
 # 第三方供应商（请修改为你的配置）
-ANTHROPIC_BASE_URL=https://your-provider.com/v1
-ANTHROPIC_API_KEY=sk-your-key-here
-MODEL=opus
+ANTHROPIC_BASE_URL=https://your-provider.com/
+ANTHROPIC_AUTH_TOKEN=sk-your-token-here
+ANTHROPIC_MODEL=model-name
 EOF
   fi
 }
