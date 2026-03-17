@@ -145,16 +145,36 @@ TEMPLATE
     echo "✅ 已删除配置: $2"
     ;;
 
+  -r)
+    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
+      echo "用法: ccswitch -r <旧名称> <新名称>"
+      return 1 2>/dev/null || exit 1
+    fi
+    local OLD_FILE="$PROFILES_DIR/$2.env"
+    local NEW_FILE="$PROFILES_DIR/$3.env"
+    if [ ! -f "$OLD_FILE" ]; then
+      echo "配置 '$2' 不存在。"
+      return 1 2>/dev/null || exit 1
+    fi
+    if [ -f "$NEW_FILE" ]; then
+      echo "配置 '$3' 已存在。"
+      return 1 2>/dev/null || exit 1
+    fi
+    mv "$OLD_FILE" "$NEW_FILE"
+    echo "✅ 已重命名: $2 → $3"
+    ;;
+
   -h|--help)
     echo "Claude Code Profile Switcher"
     echo ""
     echo "用法:"
-    echo "  ccswitch <名称>        切换到指定配置"
-    echo "  ccswitch -l            列出所有配置和当前状态"
-    echo "  ccswitch -c <名称>     创建新配置"
-    echo "  ccswitch -e <名称>     编辑配置文件"
-    echo "  ccswitch -d <名称>     删除配置"
-    echo "  ccswitch -h            显示帮助"
+    echo "  ccswitch <名称>            切换到指定配置"
+    echo "  ccswitch -l                列出所有配置和当前状态"
+    echo "  ccswitch -c <名称>         创建新配置"
+    echo "  ccswitch -e <名称>         编辑配置文件"
+    echo "  ccswitch -r <旧名> <新名>  重命名配置"
+    echo "  ccswitch -d <名称>         删除配置"
+    echo "  ccswitch -h                显示帮助"
     ;;
 
   "")
