@@ -30,24 +30,15 @@ install_switch_script() {
   cat > "$SWITCH_SCRIPT" << 'SCRIPTEOF'
 #!/bin/bash
 # Claude Code Profile Switcher
-# 只切换账号相关配置（API URL / API Key / Model），其他 settings 保持不变
+# 通过环境变量切换 API 配置，不修改 settings.json
 
 PROFILES_DIR="$HOME/.claude/profiles"
-SETTINGS_FILE="$HOME/.claude/settings.json"
 
 _cc_show_current() {
-  if [ ! -f "$SETTINGS_FILE" ]; then
-    echo "settings.json 不存在"
-    return
-  fi
   echo "当前状态:"
-  local _url=$(jq -r '.env.ANTHROPIC_BASE_URL // empty' "$SETTINGS_FILE" 2>/dev/null)
-  local _token=$(jq -r '.env.ANTHROPIC_AUTH_TOKEN // empty' "$SETTINGS_FILE" 2>/dev/null)
-  local _model=$(jq -r '.env.ANTHROPIC_MODEL // empty' "$SETTINGS_FILE" 2>/dev/null)
-  local _settings_model=$(jq -r '.model // "default"' "$SETTINGS_FILE" 2>/dev/null)
-  echo "  API URL: ${_url:-<官方默认>}"
-  [ -n "$_token" ] && echo "  Token:   ${_token:0:8}..." || echo "  Token:   <默认登录凭证>"
-  echo "  Model:   ${_model:-$_settings_model}"
+  echo "  API URL: ${ANTHROPIC_BASE_URL:-<官方默认>}"
+  [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ] && echo "  Token:   ${ANTHROPIC_AUTH_TOKEN:0:8}..." || echo "  Token:   <默认登录凭证>"
+  echo "  Model:   ${ANTHROPIC_MODEL:-<默认>}"
 }
 
 _cc_apply_profile() {
@@ -58,57 +49,29 @@ _cc_apply_profile() {
     return 1
   fi
 
-  # 读取 .env 文件中的值
-  local _URL="" _TOKEN="" _MODEL=""
+  # 清除旧值
+  unset ANTHROPIC_BASE_URL
+  unset ANTHROPIC_AUTH_TOKEN
+  unset ANTHROPIC_MODEL
+
+  # 读取配置并 export
   while IFS='=' read -r key value; do
     [[ "$key" =~ ^[[:space:]]*# ]] && continue
     [[ -z "$key" ]] && continue
     key=$(echo "$key" | xargs)
     value=$(echo "$value" | xargs)
-    case "$key" in
-      ANTHROPIC_BASE_URL)  _URL="$value" ;;
-      ANTHROPIC_AUTH_TOKEN) _TOKEN="$value" ;;
-      ANTHROPIC_MODEL)     _MODEL="$value" ;;
-    esac
+    export "$key=$value"
   done < "$PROFILE_FILE"
 
-  # 构建 jq 命令，全部写入 settings.json
-  local jq_filter='.'
-
-  # 设置或删除 env.ANTHROPIC_BASE_URL
-  if [ -n "$_URL" ]; then
-    jq_filter="$jq_filter | .env.ANTHROPIC_BASE_URL = \$url"
-  else
-    jq_filter="$jq_filter | del(.env.ANTHROPIC_BASE_URL)"
-  fi
-
-  # 设置或删除 env.ANTHROPIC_AUTH_TOKEN
-  if [ -n "$_TOKEN" ]; then
-    jq_filter="$jq_filter | .env.ANTHROPIC_AUTH_TOKEN = \$token"
-  else
-    jq_filter="$jq_filter | del(.env.ANTHROPIC_AUTH_TOKEN)"
-  fi
-
-  # 设置或删除 env.ANTHROPIC_MODEL
-  if [ -n "$_MODEL" ]; then
-    jq_filter="$jq_filter | .env.ANTHROPIC_MODEL = \$model"
-  else
-    jq_filter="$jq_filter | del(.env.ANTHROPIC_MODEL)"
-  fi
-
-  # 清理旧的 model 字段和空的 env 对象
-  jq_filter="$jq_filter | del(.model) | if .env == {} then del(.env) else . end"
-
-  jq --arg url "$_URL" --arg token "$_TOKEN" --arg model "$_MODEL" \
-    "$jq_filter" "$SETTINGS_FILE" > /tmp/_claude_settings_tmp.json && \
-    mv /tmp/_claude_settings_tmp.json "$SETTINGS_FILE"
+  # 记住当前配置，新终端自动加载
+  echo "$name" > "$PROFILES_DIR/.current"
 
   echo "✅ 已切换到: $name"
   _cc_show_current
 }
 
 case "${1:-}" in
-  list|-l)
+  -l)
     echo "可用配置:"
     for f in "$PROFILES_DIR"/*.env; do
       [ -f "$f" ] || continue
@@ -244,31 +207,44 @@ EOF
   fi
 }
 
-# ── 创建 symlink ──────────────────────────────────────────
-install_command() {
-  local LINK_DIR="/usr/local/bin"
-  if [ ! -d "$LINK_DIR" ]; then
-    mkdir -p "$LINK_DIR" 2>/dev/null || true
+# ── 写入 shell rc（alias + 自动加载）──────────────────────
+install_shell_rc() {
+  detect_shell_rc
+  if [ -z "$SHELL_RC" ]; then
+    echo "⚠️  无法检测 shell 配置文件（登录 shell: $SHELL）"
+    echo "   请手动添加以下内容到你的 shell 配置文件:"
+    echo "   alias ccswitch='source $SWITCH_SCRIPT'"
+    echo "   [ -f $PROFILES_DIR/.current ] && source $SWITCH_SCRIPT \$(cat $PROFILES_DIR/.current) > /dev/null 2>&1"
+    return
   fi
 
-  if [ -w "$LINK_DIR" ]; then
-    ln -sf "$SWITCH_SCRIPT" "$LINK_DIR/ccswitch"
-    echo "命令已安装: ${LINK_DIR}/ccswitch"
-  else
-    sudo ln -sf "$SWITCH_SCRIPT" "$LINK_DIR/ccswitch"
-    echo "命令已安装: ${LINK_DIR}/ccswitch (sudo)"
+  # 先清理旧版（如果有）
+  if grep -qF "ccswitch" "$SHELL_RC" 2>/dev/null; then
+    sed -i.bak '/# Claude Code Profile Switcher/d;/ccswitch/d;/claude-switch/d' "$SHELL_RC"
+    rm -f "$SHELL_RC.bak"
   fi
+
+  # 写入 alias + 自动加载
+  cat >> "$SHELL_RC" << RCEOF
+
+# Claude Code Profile Switcher
+alias ccswitch='source $SWITCH_SCRIPT'
+[ -f $PROFILES_DIR/.current ] && source $SWITCH_SCRIPT \$(cat $PROFILES_DIR/.current) > /dev/null 2>&1
+RCEOF
+  echo "已写入 $SHELL_RC（alias + 自动加载）"
 }
 
-# ── 清理旧版 alias ────────────────────────────────────────
-cleanup_old_alias() {
-  for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
-    if [ -f "$rc" ] && grep -qF "ccswitch" "$rc"; then
-      sed -i.bak '/# Claude Code Profile Switcher/d;/ccswitch/d' "$rc"
-      rm -f "$rc.bak"
-      echo "已清理旧版 alias: $rc"
+# ── 清理旧版 symlink ──────────────────────────────────────
+cleanup_old() {
+  # 清理旧的 symlink（如果有）
+  if [ -L "/usr/local/bin/ccswitch" ]; then
+    if [ -w "/usr/local/bin" ]; then
+      rm -f "/usr/local/bin/ccswitch"
+    else
+      sudo rm -f "/usr/local/bin/ccswitch"
     fi
-  done
+    echo "已清理旧版 symlink"
+  fi
 }
 
 # ── 执行安装 ────────────────────────────────────────────────
@@ -277,8 +253,8 @@ echo ""
 
 create_default_profiles
 install_switch_script
-cleanup_old_alias
-install_command
+cleanup_old
+install_shell_rc
 
 echo ""
 echo "✅ 安装完成！"
@@ -291,8 +267,7 @@ for f in "$PROFILES_DIR"/*.env; do
   echo "  $name  —  $desc"
 done
 echo ""
-echo "用法:"
-echo "  ccswitch                切回官方 OAuth"
-echo "  ccswitch thirdparty     切到第三方"
-echo "  ccswitch -e thirdparty  编辑第三方配置"
-echo "  ccswitch -c <名称>      添加更多配置"
+echo "下一步:"
+echo "  1. 运行: source ${SHELL_RC:-~/.zshrc}"
+echo "  2. 编辑第三方配置: ccswitch -e thirdparty"
+echo "  3. 切换: ccswitch thirdparty / ccswitch"
