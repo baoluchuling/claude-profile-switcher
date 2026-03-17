@@ -173,6 +173,7 @@ SCRIPTEOF
 
 # ── 创建默认配置 ────────────────────────────────────────────
 create_default_profiles() {
+  mkdir -p "$PROFILES_DIR"
   if [ ! -f "$PROFILES_DIR/default.env" ]; then
     cat > "$PROFILES_DIR/default.env" << 'EOF'
 # Anthropic 官方（使用 OAuth 登录凭证）
